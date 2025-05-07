@@ -3,15 +3,17 @@
   "scripts": {
     "check-types": "tsc --noEmit",
     "dev": "tsx watch --clear-screen=false ./src/main",
+    "migrate": "tsx ./bin/migrate",
     "db:migrate": "tsx ./bin/migrate",
     "db:seed": "tsx ./bin/seed",
-    "build": "tsx ./bin/migrate",
-    "start": "tsx ./src/main",
+    "build": "tsc",
+    "start": "npx tsx ./src/main",
     "test": "jest --verbose"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
+    "tsx": "^4.19.3",
     "express": "^4.21.2",
     "mysql2": "^3.14.0"
   },
@@ -24,7 +26,6 @@
     "jest": "^29.7.0",
     "supertest": "^7.1.0",
     "ts-jest": "^29.3.0",
-    "tsx": "^4.19.3",
     "typescript": "^5.8.2"
   }
 }
