@@ -6,13 +6,77 @@ on:
       - staging
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Deploy to VPS
+      - name: 📦 Checkout code
+        uses: actions/checkout@v3
+
+      - name: 🔐 Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: 🛠️ Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/${{ vars.PROJECT_NAME }}:latest
+
+      - name: 🚀 Deploy on VPS via SSH
         uses: appleboy/ssh-action@master
         with:
-          username: ${{ secrets.SSH_USER }}
           host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
-          script: cd && cd traefik/deploy && bash ./js-project.sh ${{ github.event.repository.owner.name }} ${{ github.event.repository.name }} ${{ vars.PROJECT_NAME }} '${{ toJSON(vars) }}'
+          script: |
+            docker pull ${{ secrets.DOCKER_USERNAME }}/${{ vars.PROJECT_NAME }}:latest
+
+            docker stop ${{ vars.PROJECT_NAME }} || true
+            docker rm ${{ vars.PROJECT_NAME }} || true
+
+            docker network ls | grep -q proxy || docker network create proxy
+
+            GLOBAL_ENV_PATH=/home/ubuntu/traefik/data/.env
+            HOST=$(grep '^HOST=' $GLOBAL_ENV_PATH | cut -d '=' -f2)
+            APP_SECRET=$(grep '^APP_SECRET=' $GLOBAL_ENV_PATH | cut -d '=' -f2)
+            DB_HOST="$(grep '^DATABASE_SUBDOMAIN_NAME=' $GLOBAL_ENV_PATH | cut -d '=' -f2)-db"
+            DB_USER=$(grep '^USER_NAME=' $GLOBAL_ENV_PATH | cut -d '=' -f2)
+            DB_PASSWORD=$(grep '^USER_PASSWORD=' $GLOBAL_ENV_PATH | cut -d '=' -f2)
+
+            ENV_PROJECT_PATH=/tmp/${{ vars.PROJECT_NAME }}.env
+
+            echo "APP_PORT=3310" > $ENV_PROJECT_PATH
+            echo "APP_SECRET=$APP_SECRET" >> $ENV_PROJECT_PATH
+            echo "DB_HOST=$DB_HOST" >> $ENV_PROJECT_PATH
+            echo "DB_PORT=3306" >> $ENV_PROJECT_PATH
+            echo "DB_USER=$DB_USER" >> $ENV_PROJECT_PATH
+            echo "DB_PASSWORD=$DB_PASSWORD" >> $ENV_PROJECT_PATH
+            echo "DB_NAME=${{ vars.PROJECT_NAME }}" >> $ENV_PROJECT_PATH
+            echo "HOST=$HOST" >> $ENV_PROJECT_PATH
+
+            echo "✅ .env projet généré avec succès ✅"
+            echo "Contenu visible :"
+            grep -E '^(APP_PORT|DB_HOST|DB_NAME|HOST)=' $ENV_PROJECT_PATH
+            echo "ℹ️ Variables sensibles masquées (DB_USER, DB_PASSWORD, APP_SECRET)"
+
+            docker run -d \
+              --name ${{ vars.PROJECT_NAME }} \
+              --env-file $ENV_PROJECT_PATH \
+              --network proxy \
+              -l traefik.enable=true \
+              -l traefik.docker.network=proxy \
+              -l "traefik.http.routers.${{ vars.PROJECT_NAME }}-secure.rule=Host(\`${{ vars.PROJECT_NAME }}.${HOST}\`)" \
+              -l "traefik.http.routers.${{ vars.PROJECT_NAME }}-secure.entrypoints=websecure" \
+              -l "traefik.http.routers.${{ vars.PROJECT_NAME }}.tls.certresolver=letsencrypt" \
+              -l "traefik.http.services.${{ vars.PROJECT_NAME }}.loadbalancer.server.port=3310" \
+              ${{ secrets.DOCKER_USERNAME }}/${{ vars.PROJECT_NAME }}:latest
+
+            echo "⏳ Attente du démarrage du container..."
+            sleep 15
+
+            echo "🚀 Lancement de la migration..."
+            docker exec ${{ vars.PROJECT_NAME }} npm run migrate || echo "❗ Migration échouée ou non nécessaire"
